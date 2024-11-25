@@ -1,22 +1,17 @@
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-import os
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-import google.generativeai as genai
-from langchain_community.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains.question_answering import load_qa_chain
-from langchain.prompts import PromptTemplate
-from dotenv import load_dotenv
 import langdetect
-from typing import Optional
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # Add this import
-
+import os
+from dotenv import load_dotenv
+import google.generativeai as genai
+import textwrap
+import json
+import re
+from typing import Any
 # Load API key từ tệp .env
 load_dotenv()
-os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 app = FastAPI()
@@ -24,10 +19,9 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=["http://localhost:5173"],  # Add your frontend URL
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Đường dẫn đến tệp PDF mặc định
@@ -44,113 +38,132 @@ class ProcessPDFResponse(BaseModel):
 class QuestionResponse(BaseModel):
     answer: str
     detected_language: str
+    transfer: Any
 
-def detect_language(text):
+def detect_language(text: str) -> str:
     try:
-        lang = langdetect.detect(text)
-        return lang
+        return langdetect.detect(text)
     except:
         return 'en'
 
-def get_pdf_text(pdf_path):
+def get_pdf_text(pdf_path: str) -> str:
     text = ""
-    pdf_reader = PdfReader(pdf_path)
-    for page in pdf_reader.pages:
-        text += page.extract_text()
+    try:
+        pdf_reader = PdfReader(pdf_path)
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+    except Exception as e:
+        raise Exception(f"Error reading PDF: {e}")
     return text
 
-def get_text_chunks(text):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-    chunks = text_splitter.split_text(text)
+def split_text_into_chunks(text: str, chunk_size: int = 10000, overlap: int = 1000) -> list[str]:
+    chunks = []
+    for i in range(0, len(text), chunk_size - overlap):
+        chunks.append(text[i:i + chunk_size])
     return chunks
 
-def get_vector_store(text_chunks):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
-
-def get_prompt_by_language(detected_lang):
+def get_prompt_by_language(detected_lang: str) -> str:
     prompts = {
         'vi': """
         Hãy trả lời câu hỏi một cách chi tiết nhất có thể từ ngữ cảnh được cung cấp. Đảm bảo cung cấp tất cả các chi tiết.
         Nếu câu trả lời không có trong ngữ cảnh, hãy nói "Không tìm thấy câu trả lời trong ngữ cảnh", đừng đưa ra câu trả lời sai.
         
-        Ngữ cảnh:\n {context}?\n
-        Câu hỏi: \n{question}\n
+        Ngữ cảnh:\n {context}\n
+        Câu hỏi: {question}
 
         Trả lời:
         """,
         'en': """
         Answer the question as detailed as possible from the provided context. Make sure to provide all the details.
-        If the answer is not in the provided context just say, "Answer is not available in the context", don't provide the wrong answer.
+        If the answer is not in the provided context, just say, "Answer is not available in the context", don't provide the wrong answer.
         
-        Context:\n {context}?\n
-        Question: \n{question}\n
+        Context:\n {context}\n
+        Question: {question}
 
         Answer:
         """,
         'default': """
         Answer the question as detailed as possible from the provided context. Make sure to provide all the details.
-        If the answer is not in the provided context just say, "Answer is not available in the context", don't provide the wrong answer.
+        If the answer is not in the provided context, just say, "Answer is not available in the context", don't provide the wrong answer.
         
-        Context:\n {context}?\n
-        Question: \n{question}\n
+        Context:\n {context}\n
+        Question: {question}
 
         Answer:
         """
     }
     return prompts.get(detected_lang, prompts['default'])
 
-def get_conversational_chain(detected_lang):
-    prompt_template = get_prompt_by_language(detected_lang)
-    model = ChatGoogleGenerativeAI(
-        model="gemini-pro",
-        temperature=0.1,
-        max_output_tokens=450
-    )
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-    return chain
+def generate_answer(question: str, context: str, detected_lang: str) -> str:
+    prompt = get_prompt_by_language(detected_lang).format(context=context, question=question)
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = model.generate_content(prompt)
+       
+        return response.text
+    except Exception as e:
+        raise Exception(f"Error generating answer: {e}")
 
-def process_pdf():
+def process_pdf() -> tuple[bool, str, str]:
     try:
         raw_text = get_pdf_text(DEFAULT_PDF_PATH)
-        text_chunks = get_text_chunks(raw_text)
-        get_vector_store(text_chunks)
-        return True, "PDF processed successfully"
+        text_chunks = split_text_into_chunks(raw_text)
+        return True, "PDF processed successfully", " ".join(text_chunks)
     except Exception as e:
-        return False, str(e)
-
-def get_answer(user_question: str) -> tuple[str, str]:
-    try:
-        detected_lang = detect_language(user_question)
-        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-        new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-        docs = new_db.similarity_search(user_question)
-        chain = get_conversational_chain(detected_lang)
-        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-        return response["output_text"], detected_lang
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return False, str(e), ""
 
 # API endpoints
 @app.post("/process-pdf", response_model=ProcessPDFResponse)
 async def api_process_pdf():
-    """Process the default PDF file and create vector store"""
-    success, message = process_pdf()
+    success, message, _ = process_pdf()
     return ProcessPDFResponse(success=success, message=message)
 
 @app.post("/ask", response_model=QuestionResponse)
 async def ask_question(question: Question):
-    """Ask a question about the processed PDF content"""
-    if not os.path.exists("faiss_index"):
-        # Tự động xử lý PDF nếu chưa có index
-        success, message = process_pdf()
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to process PDF: " + message)
+    success, message, context = process_pdf()
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to process PDF: " + message)
     
-    answer, detected_lang = get_answer(question.question)
-    return QuestionResponse(answer=answer, detected_language=detected_lang)
+    detected_lang = detect_language(question.question)
+    try:
+        model = genai.GenerativeModel(model_name='models/gemini-1.5-flash')
+        structured_response = model.generate_content(
+            textwrap.dedent(f"""\
+            If the user does not require a money transfer or lacks sufficient information, return `null`. 
+
+            If the user does want a transfer and provides enough information, return a JSON response following this schema (ensure that the JSON response does not contain any escape characters or other unwanted special characters). 
+
+            Absolutely do not modify or filter the information regarding the transfer. 
+                {{
+                    "transactions": list[TRANSACTION]
+                }}
+
+                TRANSACTION = {{
+                    "transaction_type": str  // "bank" or "wallet"
+                    "receiver_name": str,
+                    "account_number": str,
+                    "amount": float,
+                    "description": str
+                }}
+
+                All fields are required.
+
+                Important: Only return a single piece of valid JSON text.
+
+                Here is the story:
+
+                {question.question}
+            """),
+            generation_config={'response_mime_type': 'application/json'}
+        )
+        cleaned_string = re.sub(r'\\[^\w\s]', '', structured_response.text)
+        parsed_json = json.loads(cleaned_string)
+        formatted_json = json.dumps(parsed_json, indent=4)
+        answer = generate_answer(question.question, context, detected_lang)     
+        answer = re.sub(r'\\[^\w\s]', '', answer)
+        return QuestionResponse(answer=answer, detected_language=detected_lang, transfer=parsed_json)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error answering question: {e}")
 
 # Khởi động server
 if __name__ == "__main__":

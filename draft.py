@@ -1,4 +1,4 @@
-import streamlit as st
+from pydantic import BaseModel
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
@@ -10,21 +10,47 @@ from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 import langdetect
+from typing import Optional
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware  # Add this import
 
 # Load API key từ tệp .env
 load_dotenv()
 os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
+app = FastAPI()
+(json.dumps(json.loads(cleaned_string), indent=4, ensure_ascii=False))
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    # allow_origins=["http://localhost:5173"],  # Add your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 # Đường dẫn đến tệp PDF mặc định
-DEFAULT_PDF_PATH = "BambuUP.pdf"
+DEFAULT_PDF_PATH = "DNNWallet.pdf"
+
+# Pydantic models
+class Question(BaseModel):
+    question: str
+
+class ProcessPDFResponse(BaseModel):
+    success: bool
+    message: str
+
+class QuestionResponse(BaseModel):
+    answer: str
+    detected_language: str
 
 def detect_language(text):
     try:
         lang = langdetect.detect(text)
         return lang
     except:
-        return 'en'  # Mặc định trả về tiếng Anh nếu không phát hiện được
+        return 'en'
 
 def get_pdf_text(pdf_path):
     text = ""
@@ -78,8 +104,8 @@ def get_prompt_by_language(detected_lang):
 def get_conversational_chain(detected_lang):
     prompt_template = get_prompt_by_language(detected_lang)
     model = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
-        temperature=0.3,
+        model="gemini-pro",
+        temperature=0.1,
         max_output_tokens=450
     )
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
@@ -91,45 +117,42 @@ def process_pdf():
         raw_text = get_pdf_text(DEFAULT_PDF_PATH)
         text_chunks = get_text_chunks(raw_text)
         get_vector_store(text_chunks)
-        return True
+        return True, "PDF processed successfully"
     except Exception as e:
-        st.error(f"Error processing PDF: {str(e)}")
-        return False
+        return False, str(e)
 
-def user_input(user_question):
-    detected_lang = detect_language(user_question)
+def get_answer(user_question: str) -> tuple[str, str]:
+    try:
+        detected_lang = detect_language(user_question)
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+        new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+        docs = new_db.similarity_search(user_question)
+        chain = get_conversational_chain(detected_lang)
+        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+        return response["output_text"], detected_lang
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# API endpoints
+@app.post("/process-pdf", response_model=ProcessPDFResponse)
+async def api_process_pdf():
+    """Process the default PDF file and create vector store"""
+    success, message = process_pdf()
+    return ProcessPDFResponse(success=success, message=message)
+
+@app.post("/ask", response_model=QuestionResponse)
+async def ask_question(question: Question):
+    """Ask a question about the processed PDF content"""
+    if not os.path.exists("faiss_index"):
+        # Tự động xử lý PDF nếu chưa có index
+        success, message = process_pdf()
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to process PDF: " + message)
     
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    docs = new_db.similarity_search(user_question)
-    chain = get_conversational_chain(detected_lang)
-    response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-    st.write("Reply: ", response["output_text"])
+    answer, detected_lang = get_answer(question.question)
+    return QuestionResponse(answer=answer, detected_language=detected_lang)
 
-def main():
-    st.set_page_config("Chat PDF")
-    st.header("Chat with PDF using Gemini💁")
-    
-    # Tự động xử lý PDF khi khởi động
-    if 'pdf_processed' not in st.session_state:
-        with st.spinner("Processing PDF..."):
-            if process_pdf():
-                st.session_state.pdf_processed = True
-                st.success("PDF processed successfully!")
-            else:
-                st.session_state.pdf_processed = False
-
-    user_question = st.text_input("Ask a Question from the PDF File")
-
-    if user_question:
-        user_input(user_question)
-
-    with st.sidebar:
-        st.title("Menu:")
-        if st.button("Reprocess PDF"):
-            with st.spinner("Reprocessing..."):
-                if process_pdf():
-                    st.success("PDF reprocessed successfully!")
-
+# Khởi động server
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
