@@ -1,10 +1,5 @@
-streamlit
-google-generativeai
 python-dotenv
-langchain
 PyPDF2
-chromadb
-faiss-cpu
-langchain_google_genai
-langdetect
-fastapi-cors
+fastapi
+google-generativeai
+nginx
