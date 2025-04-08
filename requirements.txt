@@ -2,4 +2,4 @@ python-dotenv
 PyPDF2
 fastapi
 google-generativeai
-nginx
+uvicorn
