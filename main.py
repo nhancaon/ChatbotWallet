@@ -143,8 +143,19 @@ async def ask_question(question: Question):
                     "receiver_name": str,
                     "account_number": str,
                     "amount": float,
-                    "description": str
+                    "description": str,
+                    "bank_name": str  // Normalize and map to one of the following:
+                ["ABBANK", "ACB", "BacABank", "BIDV", "BaoVietBank", "CBBank", "CIMB", "DBSBank",
+                "DongABank", "Eximbank", "GPBank", "HDBank", "HongLeong", "HSBC", "IBKHN", "IBKHCM",
+                "VietinBank", "IndovinaBank", "KienLongBank", "LPBank", "MBBank", "MSB", "NamABank",
+                "NCB", "Nonghyup", "OCB", "PublicBank", "PGBank", "PVcomBank", "SCB", "StandardChartered",
+                "SeABank", "SaigonBank", "SHB", "Sacombank", "ShinhanBank", "Techcombank", "TPBank",
+                "UnitedOverseas", "VietABank", "Agribank", "Vietcombank", "VietCapitalBank", "VIB",
+                "VietBank", "VPBank", "VRP", "Woori", "KookminHN", "KookminHCM", "COOPBANK", "CAKE",
+                "Ubank", "KBank", "VNPTMoney", "ViettelMoney", "Timo", "Citibank", "KEBHanaHCM",
+                "KEBHANAHN", "MAFC", "VBSP"]
                 }}
+                Normalize the bank name: If the user provides an imprecise or informal name, intelligently match and return the closest correct bank name from the list above.
 
                 All fields are required.
 
