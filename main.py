@@ -66,7 +66,7 @@ def get_prompt_by_language(detected_lang: str) -> str:
     prompts = {
         'vi': """
         Hãy trả lời câu hỏi một cách chi tiết nhất có thể từ ngữ cảnh được cung cấp. Đảm bảo cung cấp tất cả các chi tiết.
-        Nếu câu trả lời không có trong ngữ cảnh, hãy nói "Không tìm thấy câu trả lời trong ngữ cảnh", đừng đưa ra câu trả lời sai.
+        Nếu câu trả lời không có trong ngữ cảnh, hãy nói "Bạn có thể liên hệ với dịch vụ khách hàng qua email dnn-wallet@info.com để được hỗ trợ tốt nhất", đừng đưa ra câu trả lời sai.
         
         Ngữ cảnh:\n {context}\n
         Câu hỏi: {question}
@@ -75,7 +75,7 @@ def get_prompt_by_language(detected_lang: str) -> str:
         """,
         'en': """
         Answer the question as detailed as possible from the provided context. Make sure to provide all the details.
-        If the answer is not in the provided context, just say, "Answer is not available in the context", don't provide the wrong answer.
+        If the answer is not in the provided context, just say, "You can contact customer service via email at dnn-wallet@info.com for the best support", don't provide the wrong answer.
         
         Context:\n {context}\n
         Question: {question}
@@ -84,7 +84,7 @@ def get_prompt_by_language(detected_lang: str) -> str:
         """,
         'default': """
         Answer the question as detailed as possible from the provided context. Make sure to provide all the details.
-        If the answer is not in the provided context, just say, "Answer is not available in the context", don't provide the wrong answer.
+        If the answer is not in the provided context, just say, "You can contact customer service via email at dnn-wallet@info.com for the best support", don't provide the wrong answer.
         
         Context:\n {context}\n
         Question: {question}
